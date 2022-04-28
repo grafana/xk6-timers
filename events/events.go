@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dop251/goja"
+	"github.com/mstoykov/k6-taskqueue-lib/taskqueue"
 	"go.k6.io/k6/js/modules"
 )
 
@@ -121,7 +122,7 @@ func (e *Events) clearTimeout(id uint32) {
 }
 
 func (e *Events) setInterval(callback goja.Callable, delay float64, args ...goja.Value) uint32 {
-	runOnLoop := e.vu.RegisterCallback()
+	tq := taskqueue.New(e.vu.RegisterCallback)
 	id, stopCh := e.getTimerStopCh()
 
 	go func() {
@@ -132,18 +133,16 @@ func (e *Events) setInterval(callback goja.Callable, delay float64, args ...goja
 		}()
 
 		for {
+			defer tq.Close()
 			select {
 			case <-ticker.C:
-				runOnLoop(func() error {
-					runOnLoop = e.vu.RegisterCallback()
+				tq.Queue(func() error {
 					return e.call(callback, args)
 				})
 			case <-stopCh:
-				runOnLoop(noop)
 				return
 			case <-e.vu.Context().Done():
 				e.vu.State().Logger.Warnf("setInterval %d was stopped because the VU iteration was interrupted", id)
-				runOnLoop(noop)
 				return
 			}
 		}
