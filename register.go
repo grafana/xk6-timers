@@ -1,4 +1,5 @@
-package kafka
+// Package events is here just to register the k6/x/events module
+package events
 
 import (
 	"github.com/mstoykov/xk6-events/events"
