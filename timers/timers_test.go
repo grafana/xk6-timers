@@ -1,4 +1,4 @@
-package events
+package timers
 
 import (
 	"context"
@@ -22,17 +22,17 @@ func TestSetTimeout(t *testing.T) {
 		StateField:   nil,
 	}
 
-	m, ok := New().NewModuleInstance(vu).(*Events)
+	m, ok := New().NewModuleInstance(vu).(*Timers)
 	require.True(t, ok)
 	var log []string
-	require.NoError(t, rt.Set("events", m.Exports().Named))
+	require.NoError(t, rt.Set("timers", m.Exports().Named))
 	require.NoError(t, rt.Set("print", func(s string) { log = append(log, s) }))
 	loop := eventloop.New(vu)
 	vu.RegisterCallbackField = loop.RegisterCallback
 
 	err := loop.Start(func() error {
 		_, err := vu.Runtime().RunString(`
-      events.setTimeout(()=> {
+      timers.setTimeout(()=> {
         print("in setTimeout")
       })
       print("outside setTimeout")
@@ -53,10 +53,10 @@ func TestSetInterval(t *testing.T) {
 		StateField:   nil,
 	}
 
-	m, ok := New().NewModuleInstance(vu).(*Events)
+	m, ok := New().NewModuleInstance(vu).(*Timers)
 	require.True(t, ok)
 	var log []string
-	require.NoError(t, rt.Set("events", m.Exports().Named))
+	require.NoError(t, rt.Set("timers", m.Exports().Named))
 	require.NoError(t, rt.Set("print", func(s string) { log = append(log, s) }))
 	require.NoError(t, rt.Set("sleep10", func() { time.Sleep(10 * time.Millisecond) }))
 	loop := eventloop.New(vu)
@@ -65,11 +65,11 @@ func TestSetInterval(t *testing.T) {
 	err := loop.Start(func() error {
 		_, err := vu.Runtime().RunString(`
       var i = 0;
-      let s = events.setInterval(()=> {
+      let s = timers.setInterval(()=> {
         sleep10();
         if (i>1) {
           print("in setInterval");
-          events.clearInterval(s);
+          timers.clearInterval(s);
         }
         i++;
       }, 1);

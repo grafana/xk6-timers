@@ -1,4 +1,4 @@
-# xk6-events
+# xk6-timers
 
 This extension adds a PoC implementaion of setTimeout and friends based on code by @na--
 
@@ -13,7 +13,7 @@ It is implemented using the [xk6](https://k6.io/blog/extending-k6-with-xk6/) sys
 
 2. Build the binary:
   ```shell
-  $ xk6 build --with github.com/mstoykov/xk6-events
+  $ xk6 build --with github.com/grefana/xk6-timers
   ```
 
 ## Examples

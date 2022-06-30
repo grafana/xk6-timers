@@ -1,4 +1,4 @@
-module github.com/mstoykov/xk6-events
+module github.com/grafana/xk6-timers
 
 go 1.17
 
