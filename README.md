@@ -13,7 +13,7 @@ It is implemented using the [xk6](https://k6.io/blog/extending-k6-with-xk6/) sys
 
 2. Build the binary:
   ```shell
-  $ xk6 build --with github.com/grefana/xk6-timers
+  $ xk6 build --with github.com/grafana/xk6-timers
   ```
 
 ## Examples
