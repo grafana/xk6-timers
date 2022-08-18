@@ -95,7 +95,7 @@ func (e *Timers) setTimeout(callback goja.Callable, delay float64, args ...goja.
 	go func() {
 		timer := time.NewTimer(time.Duration(delay * float64(time.Millisecond)))
 		defer func() {
-			timer.Stop() // apparently there is no need to drain the channel, and it sometimes deadlocks :facepalm:
+			timer.Stop()
 			e.stopTimerCh(id)
 		}()
 
