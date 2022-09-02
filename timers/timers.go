@@ -1,4 +1,4 @@
-// Package timers is implementing setInterval setTimeout and co. Not to be used mostly for testing purposes
+// Package timers is implementing setInterval setTimeout and co.
 package timers
 
 import (
