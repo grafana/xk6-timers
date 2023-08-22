@@ -1,6 +1,6 @@
 # xk6-timers
 
-This extension adds a PoC implementaion of setTimeout and friends based on code by @na--
+This extension adds a PoC implementation of setTimeout and friends based on code by @na--
 
 It is implemented using the [xk6](https://k6.io/blog/extending-k6-with-xk6/) system.
 
