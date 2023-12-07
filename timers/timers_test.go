@@ -1,84 +1,60 @@
 package timers
 
 import (
-	"context"
 	"testing"
 	"time"
 
-	"github.com/dop251/goja"
 	"github.com/stretchr/testify/require"
-	"go.k6.io/k6/js/common"
-	"go.k6.io/k6/js/eventloop"
 	"go.k6.io/k6/js/modulestest"
 )
 
 func TestSetTimeout(t *testing.T) {
 	t.Parallel()
-	rt := goja.New()
-	vu := &modulestest.VU{
-		RuntimeField: rt,
-		InitEnvField: &common.InitEnvironment{},
-		CtxField:     context.Background(),
-		StateField:   nil,
-	}
+	runtime := modulestest.NewRuntime(t)
+	err := runtime.SetupModuleSystem(map[string]any{"k6/x/timers": New()}, nil, nil)
+	require.NoError(t, err)
 
-	m, ok := New().NewModuleInstance(vu).(*Timers)
-	require.True(t, ok)
+	rt := runtime.VU.Runtime()
 	var log []string
-	require.NoError(t, rt.Set("timers", m.Exports().Named))
 	require.NoError(t, rt.Set("print", func(s string) { log = append(log, s) }))
-	loop := eventloop.New(vu)
-	vu.RegisterCallbackField = loop.RegisterCallback
 
-	err := loop.Start(func() error {
-		_, err := vu.Runtime().RunString(`
-      timers.setTimeout(()=> {
-        print("in setTimeout")
-      })
-      print("outside setTimeout")
-      `)
-		return err
-	})
+	_, err = runtime.RunOnEventLoop(`
+		let timers = require("k6/x/timers");
+		timers.setTimeout(()=> {
+			print("in setTimeout")
+		})
+		print("outside setTimeout")
+	`)
 	require.NoError(t, err)
 	require.Equal(t, []string{"outside setTimeout", "in setTimeout"}, log)
 }
 
 func TestSetInterval(t *testing.T) {
 	t.Parallel()
-	rt := goja.New()
-	vu := &modulestest.VU{
-		RuntimeField: rt,
-		InitEnvField: &common.InitEnvironment{},
-		CtxField:     context.Background(),
-		StateField:   nil,
-	}
+	runtime := modulestest.NewRuntime(t)
+	err := runtime.SetupModuleSystem(map[string]any{"k6/x/timers": New()}, nil, nil)
+	require.NoError(t, err)
 
-	m, ok := New().NewModuleInstance(vu).(*Timers)
-	require.True(t, ok)
+	rt := runtime.VU.Runtime()
 	var log []string
-	require.NoError(t, rt.Set("timers", m.Exports().Named))
 	require.NoError(t, rt.Set("print", func(s string) { log = append(log, s) }))
 	require.NoError(t, rt.Set("sleep10", func() { time.Sleep(10 * time.Millisecond) }))
-	loop := eventloop.New(vu)
-	vu.RegisterCallbackField = loop.RegisterCallback
 
-	err := loop.Start(func() error {
-		_, err := vu.Runtime().RunString(`
-      var i = 0;
-      let s = timers.setInterval(()=> {
-        sleep10();
-        if (i>1) {
-          print("in setInterval");
-          timers.clearInterval(s);
-        }
-        i++;
-      }, 1);
-      print("outside setInterval")
-      `)
-		return err
-	})
+	_, err = runtime.RunOnEventLoop(`
+		let timers = require("k6/x/timers");
+		var i = 0;
+		let s = timers.setInterval(()=> {
+			sleep10();
+			if (i>1) {
+			  print("in setInterval");
+			  timers.clearInterval(s);
+			}
+			i++;
+		}, 1);
+		print("outside setInterval")
+	`)
 	require.NoError(t, err)
-	require.True(t, len(log) > 2)
+	require.Greater(t, len(log), 2)
 	require.Equal(t, "outside setInterval", log[0])
 	for i, l := range log[1:] {
 		require.Equal(t, "in setInterval", l, i)
