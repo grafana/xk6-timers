@@ -119,8 +119,8 @@ func (e *Timers) timerInitialization(callback goja.Callable, timeout float64, ar
 	}
 
 	task := func() error {
-                // Specification 8.1: If id does not exist in global's map of active timers, then abort these steps.
-		if _, exist := e.timers[id]; !exist 
+		// Specification 8.1: If id does not exist in global's map of active timers, then abort these steps.
+		if _, exist := e.timers[id]; !exist {
 			return nil
 		}
 
