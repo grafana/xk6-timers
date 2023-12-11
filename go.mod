@@ -4,7 +4,6 @@ go 1.20
 
 require (
 	github.com/dop251/goja v0.0.0-20231027120936-b396bb4c349d
-	github.com/mstoykov/k6-taskqueue-lib v0.1.0
 	github.com/stretchr/testify v1.8.4
 	go.k6.io/k6 v0.48.0
 )
