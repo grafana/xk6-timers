@@ -233,7 +233,7 @@ func (tq *timerQueue) stopTimer() {
 
 func (tq *timerQueue) remove(id uint64) {
 	i := tq.findIndex(id)
-	if i != -1 {
+	if i == -1 {
 		return
 	}
 
