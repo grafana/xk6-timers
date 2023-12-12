@@ -2,8 +2,9 @@
 package timers
 
 import (
-	"sync/atomic"
 	"time"
+
+	"github.com/mstoykov/k6-taskqueue-lib/taskqueue"
 
 	"github.com/dop251/goja"
 	"go.k6.io/k6/js/modules"
@@ -17,17 +18,16 @@ type RootModule struct{}
 type Timers struct {
 	vu modules.VU
 
-	timerStopCounter uint32
+	timerIDCounter uint64
 
-	timers map[int]time.Time
-	// it is just a list of the id in their time.Time order.
-	// it is used to get timers fire in sequence.
-	// not anything more then a slice as it is unlikely it will have too many ids to begin with.
-	timersQueue []int
-	tasks       []func() error
-	headTimer   *time.Timer
+	timers map[uint64]time.Time
+	// Maybe in the future if this moves to core it will be expanded to have multiple queues
+	queue *timerQueue
 
-	runOnLoop func(func() error)
+	// this used predominantly to get around very unlikely race conditions as we are adding stuff to the event loop
+	// from outside of it on multitple timers. And it is easier to just use this then redo half the work it does
+	// to make that safe
+	taskQueue *taskqueue.TaskQueue
 }
 
 var (
@@ -45,7 +45,8 @@ func New() *RootModule {
 func (*RootModule) NewModuleInstance(vu modules.VU) modules.Instance {
 	return &Timers{
 		vu:     vu,
-		timers: make(map[int]time.Time),
+		timers: make(map[uint64]time.Time),
+		queue:  new(timerQueue),
 	}
 }
 
@@ -61,8 +62,9 @@ func (e *Timers) Exports() modules.Exports {
 	}
 }
 
-func (e *Timers) nextID() uint32 {
-	return atomic.AddUint32(&e.timerStopCounter, 1)
+func (e *Timers) nextID() uint64 {
+	e.timerIDCounter++
+	return e.timerIDCounter
 }
 
 func (e *Timers) call(callback goja.Callable, args []goja.Value) error {
@@ -71,48 +73,45 @@ func (e *Timers) call(callback goja.Callable, args []goja.Value) error {
 	return err
 }
 
-func (e *Timers) setTimeout(callback goja.Callable, delay float64, args ...goja.Value) uint32 {
+func (e *Timers) setTimeout(callback goja.Callable, delay float64, args ...goja.Value) uint64 {
 	id := e.nextID()
-	e.timerInitialization(callback, delay, args, false, int(id))
+	e.timerInitialization(callback, delay, args, false, id)
 	return id
 }
 
-func (e *Timers) clearTimeout(id uint32) {
-	_, exists := e.timers[int(id)]
+func (e *Timers) clearTimeout(id uint64) {
+	_, exists := e.timers[id]
 	if !exists {
 		return
 	}
-	delete(e.timers, int(id))
-	var i, otherID int
-	var found bool
-	for i, otherID = range e.timersQueue {
-		if id == uint32(otherID) {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return
-	}
+	delete(e.timers, id)
 
-	e.timersQueue = append(e.timersQueue[:i], e.timersQueue[i+1:]...)
-	e.tasks = append(e.tasks[:i], e.tasks[i+1:]...)
-	// no need to touch the timer - if it was for this it will just do nothing and if it wasn't it will just skip it
+	e.queue.remove(id)
+	e.freeEventLoopIfPossible()
 }
 
-func (e *Timers) setInterval(callback goja.Callable, delay float64, args ...goja.Value) uint32 {
+func (e *Timers) freeEventLoopIfPossible() {
+	if e.queue.length() == 0 && e.taskQueue != nil {
+		e.taskQueue.Close()
+		e.taskQueue = nil
+	}
+}
+
+func (e *Timers) setInterval(callback goja.Callable, delay float64, args ...goja.Value) uint64 {
 	id := e.nextID()
-	e.timerInitialization(callback, delay, args, true, int(id))
+	e.timerInitialization(callback, delay, args, true, id)
 	return id
 }
 
-func (e *Timers) clearInterval(id uint32) {
+func (e *Timers) clearInterval(id uint64) {
 	e.clearTimeout(id)
 }
 
 // https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#timer-initialisation-steps
 // NOTE: previousId from the specification is always send and it is basically id
-func (e *Timers) timerInitialization(callback goja.Callable, timeout float64, args []goja.Value, repeat bool, id int) {
+func (e *Timers) timerInitialization(
+	callback goja.Callable, timeout float64, args []goja.Value, repeat bool, id uint64,
+) {
 	// skip all the nesting stuff as we do not care about them
 	if timeout < 0 {
 		timeout = 0
@@ -146,73 +145,128 @@ func (e *Timers) timerInitialization(callback goja.Callable, timeout float64, ar
 // Notes:
 // orderingId is not really used in this case
 // id is also required for us unlike how it is defined. Maybe in the future if this moves to core it will be expanded
-func (e *Timers) runAfterTimeout(timeout float64, task func() error, id int) {
-	// TODO figure out a better name
+func (e *Timers) runAfterTimeout(timeout float64, task func() error, id uint64) {
 	delay := time.Duration(timeout * float64(time.Millisecond))
-	timer := time.Now().Add(delay)
-	e.timers[id] = timer
+	triggerTime := time.Now().Add(delay)
+	e.timers[id] = triggerTime
 
 	// as we have only one orderingId we have one queue
-	// TODO add queue type and a map of queues when/if we have more then one orderingId
-	var index int
-	// don't use range as we want to index to go over one if it needs to go to the end
-	for index = 0; index < len(e.timersQueue); index++ {
-		otherTimer := e.timers[e.timersQueue[index]]
-		if otherTimer.After(timer) {
-			break
-		}
-	}
-
-	e.timersQueue = append(e.timersQueue, 0)
-	copy(e.timersQueue[index+1:], e.timersQueue[index:])
-	e.timersQueue[index] = id
-
-	e.tasks = append(e.tasks, nil)
-	copy(e.tasks[index+1:], e.tasks[index:])
-	e.tasks[index] = task
+	index := e.queue.add(&timer{
+		id:          id,
+		task:        task,
+		nextTrigger: triggerTime,
+	})
 
 	if index != 0 {
-		// we are not the earliers in the queue so we can stop here
-		return
+		return // not a timer at the very beginning
 	}
+
 	e.setupTaskTimeout()
 }
 
 func (e *Timers) runFirstTask() error {
-	e.runOnLoop = nil
-	tasksLen := len(e.tasks)
-	if tasksLen == 0 {
+	t := e.queue.pop()
+	if t == nil {
 		return nil // everything was cleared
 	}
 
-	task := e.tasks[0]
-	copy(e.tasks, e.tasks[1:])
-	e.tasks = e.tasks[:tasksLen-1]
+	err := t.task()
 
-	copy(e.timersQueue, e.timersQueue[1:])
-	e.timersQueue = e.timersQueue[:tasksLen-1]
-
-	err := task()
-
-	if len(e.timersQueue) > 0 {
+	if e.queue.length() > 0 {
 		e.setupTaskTimeout()
+	} else {
+		e.freeEventLoopIfPossible()
 	}
+
 	return err
 }
 
 func (e *Timers) setupTaskTimeout() {
-	if e.headTimer != nil {
-		e.headTimer.Stop()
+	e.queue.stopTimer()
+	delay := -time.Since(e.timers[e.queue.first().id])
+	if e.taskQueue == nil {
+		e.taskQueue = taskqueue.New(e.vu.RegisterCallback)
+	}
+	q := e.taskQueue
+	e.queue.head = time.AfterFunc(delay, func() {
+		q.Queue(e.runFirstTask)
+	})
+}
+
+// this is just a small struct to keep the internals of a timer
+type timer struct {
+	id          uint64
+	nextTrigger time.Time
+	task        func() error
+}
+
+// this is just a list of timers that should be ordered once after the other
+// this mostly just has methods to work on the slice
+type timerQueue struct {
+	queue []*timer
+	head  *time.Timer
+}
+
+func (tq *timerQueue) add(t *timer) int {
+	var i int
+	// don't use range as we want to index to go over one if it needs to go to the end
+	for ; i < len(tq.queue); i++ {
+		if tq.queue[i].nextTrigger.After(t.nextTrigger) {
+			break
+		}
+	}
+
+	tq.queue = append(tq.queue, nil)
+	copy(tq.queue[i+1:], tq.queue[i:])
+	tq.queue[i] = t
+	return i
+}
+
+func (tq *timerQueue) stopTimer() {
+	if tq.head != nil && tq.head.Stop() { // we have a timer and we stopped it before it was over.
 		select {
-		case <-e.headTimer.C:
+		case <-tq.head.C:
 		default:
 		}
 	}
-	delay := -time.Since(e.timers[e.timersQueue[0]])
-	if e.runOnLoop == nil {
-		e.runOnLoop = e.vu.RegisterCallback()
+}
+
+func (tq *timerQueue) remove(id uint64) {
+	i := tq.findIndex(id)
+	if i != -1 {
+		return
 	}
-	e.headTimer = time.AfterFunc(delay, func() {
-		e.runOnLoop(e.runFirstTask)
-	})
+
+	tq.queue = append(tq.queue[:i], tq.queue[i+1:]...)
+}
+
+func (tq *timerQueue) findIndex(id uint64) int {
+	for i, timer := range tq.queue {
+		if id == timer.id {
+			return i
+		}
+	}
+	return -1
+}
+
+func (tq *timerQueue) pop() *timer {
+	length := len(tq.queue)
+	if length == 0 {
+		return nil
+	}
+	t := tq.queue[0]
+	copy(tq.queue, tq.queue[1:])
+	tq.queue = tq.queue[:length-1]
+	return t
+}
+
+func (tq *timerQueue) length() int {
+	return len(tq.queue)
+}
+
+func (tq *timerQueue) first() *timer {
+	if tq.length() == 0 {
+		return nil
+	}
+	return tq.queue[0]
 }
