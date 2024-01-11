@@ -1,6 +1,7 @@
 package timers
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -136,5 +137,56 @@ func TestSetIntervalOrder(t *testing.T) {
 		}
 		require.Equal(t, log[len(log)-1], "last")
 		log = log[:0]
+	}
+}
+
+func TestSetTimeoutContextCancel(t *testing.T) {
+	t.Parallel()
+	runtime := modulestest.NewRuntime(t)
+	err := runtime.SetupModuleSystem(map[string]any{"k6/x/timers": New()}, nil, nil)
+	require.NoError(t, err)
+
+	rt := runtime.VU.Runtime()
+	var log []string
+	interruptChannel := make(chan struct{})
+	require.NoError(t, rt.Set("print", func(s string) { log = append(log, s) }))
+	require.NoError(t, rt.Set("interrupt", func() {
+		select {
+		case interruptChannel <- struct{}{}:
+		default:
+		}
+	}))
+
+	_, err = rt.RunString(`globalThis.setTimeout = require("k6/x/timers").setTimeout;`)
+	require.NoError(t, err)
+
+	for i := 0; i < 2000; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		runtime.CancelContext = cancel
+		runtime.VU.CtxField = ctx
+		runtime.VU.RuntimeField.ClearInterrupt()
+		const interruptMsg = "definitely an interrupt"
+		go func() {
+			<-interruptChannel
+			time.Sleep(time.Millisecond)
+			runtime.CancelContext()
+			runtime.VU.RuntimeField.Interrupt(interruptMsg)
+		}()
+		_, err = runtime.RunOnEventLoop(`
+			(async () => {
+				let poll = async (resolve, reject) => {
+					await (async () => 5);
+					setTimeout(poll, 1, resolve, reject);
+					interrupt();
+				}
+				setTimeout(async () => {
+					await new Promise(poll)
+				}, 0)
+			})()
+		`)
+		if err != nil {
+			require.ErrorContains(t, err, interruptMsg)
+		}
+		require.Empty(t, log)
 	}
 }
